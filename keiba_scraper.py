@@ -10,9 +10,9 @@ import urllib.request
 
 JST = timezone(timedelta(hours=9))
 TARGET_DATE = sys.argv[1] if len(sys.argv) > 1 else datetime.now(JST).strftime("%Y-%m-%d")
-NETKEIBA_COOKIE = os.environ.get("NETKEIBA_COOKIE", "")
+CAPTURED_AT = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
 
-print(f"=== クラウド自動実行開始: [{TARGET_DATE}] ===")
+print(f"=== クラウド自動実行開始: 日付[{TARGET_DATE}], 取得時刻[{CAPTURED_AT}] ===")
 
 # 1. 友人ツールデータ取得
 tool_url = f"https://keiba-simu-euphoria.ef4-db.workers.dev/days/{TARGET_DATE}.json"
@@ -27,28 +27,19 @@ except Exception as e:
 races = raw_data.get("races", [])
 late_races = raw_data.get("late", {}).get("races", {})
 
-# 2. netkeibaプレミアムデータ取得関数
-def get_netkeiba_page(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-    }
-    if NETKEIBA_COOKIE:
-        headers["Cookie"] = NETKEIBA_COOKIE
-    req = urllib.request.Request(url, headers=headers)
+def fetch_netkeiba_details(netkeiba_id):
+    url = f"https://race.netkeiba.com/race/shutuba.html?race_id={netkeiba_id}"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req) as res:
-            return res.read().decode("utf-8", errors="replace")
+            html = res.read().decode("utf-8", errors="replace")
     except Exception:
-        return ""
+        return "", {}
 
-def fetch_netkeiba_all(netkeiba_id):
-    # 出馬表
-    shutuba_html = get_netkeiba_page(f"https://race.netkeiba.com/race/shutuba.html?race_id={netkeiba_id}")
-    name_m = re.search(r'<h1 class="RaceName">([^<]+)</h1>', shutuba_html)
+    name_m = re.search(r'<h1 class="RaceName">([^<]+)</h1>', html)
     race_name = name_m.group(1).strip() if name_m else ""
-
     horses = {}
-    for row in re.findall(r'<tr[^>]*class="[^"]*HorseList[^"]*"[^>]*>(.*?)</tr>', shutuba_html, re.DOTALL):
+    for row in re.findall(r'<tr[^>]*class="[^"]*HorseList[^"]*"[^>]*>(.*?)</tr>', html, re.DOTALL):
         u_m = re.search(r'<td[^>]*class="[^"]*Umaban[^"]*"[^>]*>\s*(\d+)\s*</td>', row)
         w_m = re.search(r'<td[^>]*class="[^"]*Waku[^"]*"[^>]*>.*?<span>(\d+)</span>', row, re.DOTALL)
         j_m = re.search(r'<td[^>]*class="[^"]*Jockey[^"]*"[^>]*>.*?<a[^>]*>([^<]+)</a>', row, re.DOTALL)
@@ -57,56 +48,27 @@ def fetch_netkeiba_all(netkeiba_id):
             horses[int(u_m.group(1))] = {
                 "枠": int(w_m.group(1)) if w_m else "-",
                 "騎手": j_m.group(1).strip() if j_m else "不明",
-                "調教師": t_m.group(1).strip() if t_m else "不明",
-                "調教評価": "-",
-                "調教短評": "-",
-                "厩舎コメント": "-"
+                "調教師": t_m.group(1).strip() if t_m else "不明"
             }
-
-    # 有料限定：調教タイム・評価 (oikiri)
-    if NETKEIBA_COOKIE:
-        time.sleep(0.2)
-        oikiri_html = get_netkeiba_page(f"https://race.netkeiba.com/race/oikiri.html?race_id={netkeiba_id}")
-        for row in re.findall(r'<tr[^>]*>(.*?)</tr>', oikiri_html, re.DOTALL):
-            u_m = re.search(r'<td[^>]*class="[^"]*Umaban[^"]*"[^>]*>\s*(\d+)\s*</td>', row)
-            if u_m:
-                umaban = int(u_m.group(1))
-                if umaban in horses:
-                    # 評価 (A, B, C等)
-                    rank_m = re.search(r'<span class="Rank_([^"]+)">([^<]+)</span>', row)
-                    if rank_m:
-                        horses[umaban]["調教評価"] = rank_m.group(2).strip()
-                    # 短評
-                    tanpyo_m = re.search(r'<td class="Evaluation"[^>]*>.*?<span>([^<]+)</span>', row, re.DOTALL)
-                    if tanpyo_m:
-                        horses[umaban]["調教短評"] = tanpyo_m.group(1).strip()
-
-        # 有料限定：厩舎コメント (comment)
-        time.sleep(0.2)
-        comment_html = get_netkeiba_page(f"https://race.netkeiba.com/race/comment.html?race_id={netkeiba_id}")
-        for block in re.findall(r'<tr class="HorseList"[^>]*>(.*?)</tr>', comment_html, re.DOTALL):
-            u_m = re.search(r'<td[^>]*class="[^"]*Umaban[^"]*"[^>]*>\s*(\d+)\s*</td>', block)
-            c_m = re.search(r'<div class="Comment_Text"[^>]*>(.*?)</div>', block, re.DOTALL)
-            if u_m and c_m:
-                umaban = int(u_m.group(1))
-                if umaban in horses:
-                    comment_clean = re.sub(r'<[^>]+>', '', c_m.group(1)).strip()
-                    horses[umaban]["厩舎コメント"] = comment_clean.replace('\n', ' ')
-
     return race_name, horses
 
 csv_rows = []
+history_rows = []
+
+# 全レースを処理
 for idx, r in enumerate(races, start=1):
-    tid = r.get("race_id", "")
-    parts = tid.split("_")
-    n_id = f"{parts[0]}{parts[2]}{parts[3]}{parts[4]}{parts[5]}"
+    raw_race_id = r.get("race_id", "")
+    parts = raw_race_id.split("_")
+    n_id = f"{parts[0]}{parts[2]}{parts[3]}{parts[4]}{parts[5]}" if len(parts) > 5 else raw_race_id
     race_num = int(parts[5]) if len(parts) > 5 and parts[5].isdigit() else idx
-    r_name, nk_horses = fetch_netkeiba_all(n_id)
+    r_name, nk_horses = fetch_netkeiba_details(n_id)
     time.sleep(0.2)
 
+    odds_snapshot = r.get("odds_snapshot_at", "不明")
     dist = r.get("distance_m", "")
     surface = r.get("surface", "")
-    going = r.get("going", "")
+    going_info = r.get("going", "")
+    baba_str = f"{surface}_{going_info}" if surface or going_info else "不明"
 
     sample_horse = r.get("horses", [{}])[0]
     p_pred = sample_horse.get("pace_shape_predicted", {}).get("predicted_curve", {})
@@ -115,7 +77,7 @@ for idx, r in enumerate(races, start=1):
     s_prob = round(pace_probs.get("S", 0) * 100, 1)
     pressure = round(p_pred.get("pressure_score", 0), 2)
 
-    l_dict = {item.get("horse_no"): item for item in late_races.get(tid, [])}
+    l_dict = {item.get("horse_no"): item for item in late_races.get(raw_race_id, [])}
     for h in r.get("horses", []):
         no = h.get("horse_no")
         lh = l_dict.get(no, {})
@@ -131,13 +93,16 @@ for idx, r in enumerate(races, start=1):
         bw_score = lh.get("bw_response_score", h.get("bw_response_score", 0))
 
         csv_rows.append({
+            "取得日時": CAPTURED_AT,
+            "オッズ基準日時": odds_snapshot,
             "日付": TARGET_DATE,
             "場名": r.get("venue"),
             "R": race_num,
             "レース名": r_name or r.get("race_name") or f"第{race_num}競走",
+            "元レースID": raw_race_id,
             "発走": r.get("post_time"),
             "距離": dist,
-            "馬場": f"{surface}_{going}",
+            "馬場": baba_str,
             "Hペース率(%)": h_prob,
             "Sペース率(%)": s_prob,
             "先行争い圧力": pressure,
@@ -162,28 +127,50 @@ for idx, r in enumerate(races, start=1):
             "馬体重": lh.get("bodyweight_kg", h.get("bodyweight_kg")),
             "増減": lh.get("bodyweight_delta_kg", h.get("bodyweight_delta_kg")),
             "体重評価スコア": round(bw_score, 4) if bw_score is not None else 0,
-            "調教評価": nkh.get("調教評価", "-"),
-            "調教短評": nkh.get("調教短評", "-"),
-            "厩舎コメント": nkh.get("厩舎コメント", "-"),
         })
 
-output = io.StringIO()
-writer = csv.DictWriter(output, fieldnames=list(csv_rows[0].keys()))
-writer.writeheader()
-writer.writerows(csv_rows)
-csv_content = output.getvalue()
+        for past in h.get("past_runs", []):
+            history_rows.append({
+                "元レースID": raw_race_id,
+                "馬番": no,
+                "馬名": h.get("name"),
+                "出走日": past.get("date"),
+                "距離": past.get("distance_m"),
+                "馬場": past.get("surface"),
+                "着順": past.get("finish_order"),
+                "頭数": past.get("field_size"),
+                "上がり3F": past.get("late_3f_sec"),
+                "上がり優位度": past.get("late_3f_advantage"),
+                "通過順比率": past.get("corner_ratio"),
+            })
 
-csv_file_name = f"keiba_integrated_{TARGET_DATE}.csv"
+# CSV文字列の作成
+def build_csv_str(rows):
+    if not rows:
+        return ""
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
 
-# 3. GAS送信
+main_csv_content = build_csv_str(csv_rows)
+hist_csv_content = build_csv_str(history_rows)
+
+main_filename = f"keiba_integrated_{TARGET_DATE}.csv"
+hist_filename = f"horse_history_{TARGET_DATE}.csv"
+
+# 3. GASを経由して2ファイルを同時にGoogleドライブへ送信
 gas_url = os.environ.get("GAS_WEBHOOK_URL")
 if not gas_url:
     print("× エラー: GAS_WEBHOOK_URL が設定されていません")
     sys.exit(1)
 
 payload = {
-    "filename": csv_file_name,
-    "content": csv_content
+    "files": [
+        {"filename": main_filename, "content": main_csv_content},
+        {"filename": hist_filename, "content": hist_csv_content}
+    ]
 }
 
 req_gas = urllib.request.Request(
@@ -194,7 +181,7 @@ req_gas = urllib.request.Request(
 
 try:
     with urllib.request.urlopen(req_gas) as res:
-        print(f"○ Googleドライブへの保存完了: {csv_file_name}")
+        print(f"○ Googleドライブへの保存完了: {main_filename}, {hist_filename}")
 except Exception as e:
     print(f"× 送信エラー: {e}")
     sys.exit(1)
