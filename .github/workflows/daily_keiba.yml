@@ -22,5 +22,6 @@ jobs:
       - name: スクレイピング＆Googleドライブ保存
         env:
           GAS_WEBHOOK_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+          NETKEIBA_COOKIE: ${{ secrets.NETKEIBA_COOKIE }}
         run: |
           python keiba_scraper.py
