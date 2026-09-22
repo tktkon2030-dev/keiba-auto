@@ -10,6 +10,7 @@ import urllib.request
 
 JST = timezone(timedelta(hours=9))
 TARGET_DATE = sys.argv[1] if len(sys.argv) > 1 else datetime.now(JST).strftime("%Y-%m-%d")
+NETKEIBA_COOKIE = os.environ.get("NETKEIBA_COOKIE", "")
 
 print(f"=== クラウド自動実行開始: [{TARGET_DATE}] ===")
 
@@ -26,20 +27,28 @@ except Exception as e:
 races = raw_data.get("races", [])
 late_races = raw_data.get("late", {}).get("races", {})
 
-# 2. netkeiba詳細取得
-def fetch_netkeiba_details(netkeiba_id):
-    url = f"https://race.netkeiba.com/race/shutuba.html?race_id={netkeiba_id}"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+# 2. netkeibaプレミアムデータ取得関数
+def get_netkeiba_page(url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    }
+    if NETKEIBA_COOKIE:
+        headers["Cookie"] = NETKEIBA_COOKIE
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req) as res:
-            html = res.read().decode("utf-8", errors="replace")
+            return res.read().decode("utf-8", errors="replace")
     except Exception:
-        return "", {}
+        return ""
 
-    name_m = re.search(r'<h1 class="RaceName">([^<]+)</h1>', html)
+def fetch_netkeiba_all(netkeiba_id):
+    # 出馬表
+    shutuba_html = get_netkeiba_page(f"https://race.netkeiba.com/race/shutuba.html?race_id={netkeiba_id}")
+    name_m = re.search(r'<h1 class="RaceName">([^<]+)</h1>', shutuba_html)
     race_name = name_m.group(1).strip() if name_m else ""
+
     horses = {}
-    for row in re.findall(r'<tr[^>]*class="[^"]*HorseList[^"]*"[^>]*>(.*?)</tr>', html, re.DOTALL):
+    for row in re.findall(r'<tr[^>]*class="[^"]*HorseList[^"]*"[^>]*>(.*?)</tr>', shutuba_html, re.DOTALL):
         u_m = re.search(r'<td[^>]*class="[^"]*Umaban[^"]*"[^>]*>\s*(\d+)\s*</td>', row)
         w_m = re.search(r'<td[^>]*class="[^"]*Waku[^"]*"[^>]*>.*?<span>(\d+)</span>', row, re.DOTALL)
         j_m = re.search(r'<td[^>]*class="[^"]*Jockey[^"]*"[^>]*>.*?<a[^>]*>([^<]+)</a>', row, re.DOTALL)
@@ -48,8 +57,42 @@ def fetch_netkeiba_details(netkeiba_id):
             horses[int(u_m.group(1))] = {
                 "枠": int(w_m.group(1)) if w_m else "-",
                 "騎手": j_m.group(1).strip() if j_m else "不明",
-                "調教師": t_m.group(1).strip() if t_m else "不明"
+                "調教師": t_m.group(1).strip() if t_m else "不明",
+                "調教評価": "-",
+                "調教短評": "-",
+                "厩舎コメント": "-"
             }
+
+    # 有料限定：調教タイム・評価 (oikiri)
+    if NETKEIBA_COOKIE:
+        time.sleep(0.2)
+        oikiri_html = get_netkeiba_page(f"https://race.netkeiba.com/race/oikiri.html?race_id={netkeiba_id}")
+        for row in re.findall(r'<tr[^>]*>(.*?)</tr>', oikiri_html, re.DOTALL):
+            u_m = re.search(r'<td[^>]*class="[^"]*Umaban[^"]*"[^>]*>\s*(\d+)\s*</td>', row)
+            if u_m:
+                umaban = int(u_m.group(1))
+                if umaban in horses:
+                    # 評価 (A, B, C等)
+                    rank_m = re.search(r'<span class="Rank_([^"]+)">([^<]+)</span>', row)
+                    if rank_m:
+                        horses[umaban]["調教評価"] = rank_m.group(2).strip()
+                    # 短評
+                    tanpyo_m = re.search(r'<td class="Evaluation"[^>]*>.*?<span>([^<]+)</span>', row, re.DOTALL)
+                    if tanpyo_m:
+                        horses[umaban]["調教短評"] = tanpyo_m.group(1).strip()
+
+        # 有料限定：厩舎コメント (comment)
+        time.sleep(0.2)
+        comment_html = get_netkeiba_page(f"https://race.netkeiba.com/race/comment.html?race_id={netkeiba_id}")
+        for block in re.findall(r'<tr class="HorseList"[^>]*>(.*?)</tr>', comment_html, re.DOTALL):
+            u_m = re.search(r'<td[^>]*class="[^"]*Umaban[^"]*"[^>]*>\s*(\d+)\s*</td>', block)
+            c_m = re.search(r'<div class="Comment_Text"[^>]*>(.*?)</div>', block, re.DOTALL)
+            if u_m and c_m:
+                umaban = int(u_m.group(1))
+                if umaban in horses:
+                    comment_clean = re.sub(r'<[^>]+>', '', c_m.group(1)).strip()
+                    horses[umaban]["厩舎コメント"] = comment_clean.replace('\n', ' ')
+
     return race_name, horses
 
 csv_rows = []
@@ -58,20 +101,17 @@ for idx, r in enumerate(races, start=1):
     parts = tid.split("_")
     n_id = f"{parts[0]}{parts[2]}{parts[3]}{parts[4]}{parts[5]}"
     race_num = int(parts[5]) if len(parts) > 5 and parts[5].isdigit() else idx
-    r_name, nk_horses = fetch_netkeiba_details(n_id)
-    time.sleep(0.3)
+    r_name, nk_horses = fetch_netkeiba_all(n_id)
+    time.sleep(0.2)
 
-    # レース共通の環境・ペース指標
     dist = r.get("distance_m", "")
     surface = r.get("surface", "")
     going = r.get("going", "")
-    
-    # ペース予測データの抽出
+
     sample_horse = r.get("horses", [{}])[0]
     p_pred = sample_horse.get("pace_shape_predicted", {}).get("predicted_curve", {})
     pace_probs = p_pred.get("pace_probs", {})
     h_prob = round(pace_probs.get("H", 0) * 100, 1)
-    m_prob = round(pace_probs.get("M", 0) * 100, 1)
     s_prob = round(pace_probs.get("S", 0) * 100, 1)
     pressure = round(p_pred.get("pressure_score", 0), 2)
 
@@ -88,8 +128,6 @@ for idx, r in enumerate(races, start=1):
         place_odds = lh.get("place_odds_t10", h.get("place_odds_t10", ""))
         place_prob = h.get("pl_place_prob", 0) or 0
         ev = round(m_share * odds, 2) if odds else 0
-
-        # 馬体重評価スコア
         bw_score = lh.get("bw_response_score", h.get("bw_response_score", 0))
 
         csv_rows.append({
@@ -124,6 +162,9 @@ for idx, r in enumerate(races, start=1):
             "馬体重": lh.get("bodyweight_kg", h.get("bodyweight_kg")),
             "増減": lh.get("bodyweight_delta_kg", h.get("bodyweight_delta_kg")),
             "体重評価スコア": round(bw_score, 4) if bw_score is not None else 0,
+            "調教評価": nkh.get("調教評価", "-"),
+            "調教短評": nkh.get("調教短評", "-"),
+            "厩舎コメント": nkh.get("厩舎コメント", "-"),
         })
 
 output = io.StringIO()
@@ -134,7 +175,7 @@ csv_content = output.getvalue()
 
 csv_file_name = f"keiba_integrated_{TARGET_DATE}.csv"
 
-# 3. GASを経由してGoogleドライブへ送信
+# 3. GAS送信
 gas_url = os.environ.get("GAS_WEBHOOK_URL")
 if not gas_url:
     print("× エラー: GAS_WEBHOOK_URL が設定されていません")
