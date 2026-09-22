@@ -1,0 +1,20 @@
+name: [TEST] Keiba Scraper Dry Run
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: チェックアウト
+        uses: actions/checkout@v4
+
+      - name: Pythonセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 試運転スクリプト実行（GAS送信なし）
+        run: |
+          python keiba_scraper_test.py
