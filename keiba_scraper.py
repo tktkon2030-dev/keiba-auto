@@ -96,7 +96,6 @@ for idx, r in enumerate(races, start=1):
             "増減": h.get("bodyweight_delta_kg"),
         })
 
-# CSVテキスト生成
 output = io.StringIO()
 writer = csv.DictWriter(output, fieldnames=list(csv_rows[0].keys()))
 writer.writeheader()
