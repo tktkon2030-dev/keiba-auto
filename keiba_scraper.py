@@ -9,8 +9,9 @@ from datetime import datetime, timezone, timedelta
 import urllib.request
 
 JST = timezone(timedelta(hours=9))
-TARGET_DATE = sys.argv[1] if len(sys.argv) > 1 else datetime.now(JST).strftime("%Y-%m-%d")
-CAPTURED_AT = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+now_jst = datetime.now(JST)
+TARGET_DATE = sys.argv[1] if len(sys.argv) > 1 else now_jst.strftime("%Y-%m-%d")
+CAPTURED_AT = now_jst.strftime("%Y-%m-%d %H:%M:%S")
 
 print(f"=== クラウド自動実行開始: 日付[{TARGET_DATE}], 取得時刻[{CAPTURED_AT}] ===")
 
@@ -55,7 +56,6 @@ def fetch_netkeiba_details(netkeiba_id):
 csv_rows = []
 history_rows = []
 
-# 全レースを処理
 for idx, r in enumerate(races, start=1):
     raw_race_id = r.get("race_id", "")
     parts = raw_race_id.split("_")
@@ -64,11 +64,25 @@ for idx, r in enumerate(races, start=1):
     r_name, nk_horses = fetch_netkeiba_details(n_id)
     time.sleep(0.2)
 
+    post_time_str = r.get("post_time", "")
     odds_snapshot = r.get("odds_snapshot_at", "不明")
+    
+    # 発走前後の判定ロジック
+    is_pre_race = False
+    if post_time_str:
+        try:
+            post_dt = datetime.strptime(f"{TARGET_DATE} {post_time_str}:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=JST)
+            # 取得時刻が発走前、かつオッズ取得が発走時刻以前なら事前予想として有効
+            if now_jst <= post_dt:
+                is_pre_race = True
+        except Exception:
+            pass
+
     dist = r.get("distance_m", "")
-    surface = r.get("surface", "")
-    going_info = r.get("going", "")
-    baba_str = f"{surface}_{going_info}" if surface or going_info else "不明"
+    surface = r.get("surface", "不明")
+    going_info = r.get("going", "不明")
+    if isinstance(going_info, dict):
+        going_info = going_info.get("surface_going") or going_info.get("turf") or going_info.get("dirt") or "不明"
 
     sample_horse = r.get("horses", [{}])[0]
     p_pred = sample_horse.get("pace_shape_predicted", {}).get("predicted_curve", {})
@@ -94,15 +108,17 @@ for idx, r in enumerate(races, start=1):
 
         csv_rows.append({
             "取得日時": CAPTURED_AT,
+            "事前予想フラグ": 1 if is_pre_race else 0,
             "オッズ基準日時": odds_snapshot,
             "日付": TARGET_DATE,
             "場名": r.get("venue"),
             "R": race_num,
             "レース名": r_name or r.get("race_name") or f"第{race_num}競走",
             "元レースID": raw_race_id,
-            "発走": r.get("post_time"),
+            "発走": post_time_str,
             "距離": dist,
-            "馬場": baba_str,
+            "芝ダ": surface,
+            "馬場状態": going_info,
             "Hペース率(%)": h_prob,
             "Sペース率(%)": s_prob,
             "先行争い圧力": pressure,
@@ -130,21 +146,29 @@ for idx, r in enumerate(races, start=1):
         })
 
         for past in h.get("past_runs", []):
+            lap_prof = past.get("lap_profile") or {}
+            laps_list = lap_prof.get("laps", []) if isinstance(lap_prof, dict) else []
+            late_3f = past.get("late_3f_sec")
+            # 20秒未満は異常値（障害ラストや不整合データ）フラグ
+            late_3f_valid = 1 if (late_3f and late_3f >= 25.0) else 0
+
             history_rows.append({
                 "元レースID": raw_race_id,
                 "馬番": no,
                 "馬名": h.get("name"),
                 "出走日": past.get("date"),
                 "距離": past.get("distance_m"),
-                "馬場": past.get("surface"),
+                "芝ダ": past.get("surface") or "不明",
+                "馬場状態": past.get("going") or "不明",
                 "着順": past.get("finish_order"),
                 "頭数": past.get("field_size"),
-                "上がり3F": past.get("late_3f_sec"),
+                "上がり3F": late_3f,
+                "上がり3F有効": late_3f_valid,
                 "上がり優位度": past.get("late_3f_advantage"),
                 "通過順比率": past.get("corner_ratio"),
+                "実測ラップ配列": json.dumps(laps_list) if laps_list else "[]"
             })
 
-# CSV文字列の作成
 def build_csv_str(rows):
     if not rows:
         return ""
@@ -160,7 +184,6 @@ hist_csv_content = build_csv_str(history_rows)
 main_filename = f"keiba_integrated_{TARGET_DATE}.csv"
 hist_filename = f"horse_history_{TARGET_DATE}.csv"
 
-# 3. GASを経由して2ファイルを同時にGoogleドライブへ送信
 gas_url = os.environ.get("GAS_WEBHOOK_URL")
 if not gas_url:
     print("× エラー: GAS_WEBHOOK_URL が設定されていません")
