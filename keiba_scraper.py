@@ -2,15 +2,12 @@ import os
 import sys
 import json
 import csv
+import io
 import re
 import time
 from datetime import datetime, timezone, timedelta
 import urllib.request
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
-# 日本時間(JST)で当日日付を取得
 JST = timezone(timedelta(hours=9))
 TARGET_DATE = sys.argv[1] if len(sys.argv) > 1 else datetime.now(JST).strftime("%Y-%m-%d")
 
@@ -99,27 +96,35 @@ for idx, r in enumerate(races, start=1):
             "増減": h.get("bodyweight_delta_kg"),
         })
 
+# CSVテキスト生成
+output = io.StringIO()
+writer = csv.DictWriter(output, fieldnames=list(csv_rows[0].keys()))
+writer.writeheader()
+writer.writerows(csv_rows)
+csv_content = output.getvalue()
+
 csv_file_name = f"keiba_integrated_{TARGET_DATE}.csv"
-with open(csv_file_name, mode="w", encoding="utf-8-sig", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=list(csv_rows[0].keys()))
-    writer.writeheader()
-    writer.writerows(csv_rows)
 
-# 3. Googleドライブへ直接アップロード
-sa_info = json.loads(os.environ["GDRIVE_SA_KEY"])
-folder_id = os.environ["GDRIVE_FOLDER_ID"]
-creds = service_account.Credentials.from_service_account_info(
-    sa_info, scopes=["https://www.googleapis.com/auth/drive"]
+# 3. GASを経由してGoogleドライブへ送信
+gas_url = os.environ.get("GAS_WEBHOOK_URL")
+if not gas_url:
+    print("× エラー: GAS_WEBHOOK_URL が設定されていません")
+    sys.exit(1)
+
+payload = {
+    "filename": csv_file_name,
+    "content": csv_content
+}
+
+req_gas = urllib.request.Request(
+    gas_url,
+    data=json.dumps(payload).encode("utf-8"),
+    headers={"Content-Type": "application/json"}
 )
-drive_service = build("drive", "v3", credentials=creds)
 
-# 既存の同名ファイルがあれば削除
-query = f"name = '{csv_file_name}' and '{folder_id}' in parents and trashed = false"
-existing = drive_service.files().list(q=query, fields="files(id)").execute().get("files", [])
-for file in existing:
-    drive_service.files().delete(fileId=file["id"]).execute()
-
-media = MediaFileUpload(csv_file_name, mimetype="text/csv")
-file_metadata = {"name": csv_file_name, "parents": [folder_id]}
-drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-print(f"○ Googleドライブへのアップロードが完了しました: {csv_file_name}")
+try:
+    with urllib.request.urlopen(req_gas) as res:
+        print(f"○ Googleドライブへの保存完了: {csv_file_name}")
+except Exception as e:
+    print(f"× 送信エラー: {e}")
+    sys.exit(1)
