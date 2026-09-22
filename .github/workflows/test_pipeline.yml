@@ -1,4 +1,4 @@
-name: [TEST] Keiba Scraper Dry Run
+name: TEST Keiba Scraper Dry Run
 
 on:
   workflow_dispatch:
