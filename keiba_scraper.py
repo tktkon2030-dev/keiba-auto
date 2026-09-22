@@ -11,9 +11,9 @@ import urllib.request
 JST = timezone(timedelta(hours=9))
 now_jst = datetime.now(JST)
 TARGET_DATE = sys.argv[1] if len(sys.argv) > 1 else now_jst.strftime("%Y-%m-%d")
-CAPTURED_AT = now_jst.strftime("%Y-%m-%d %H:%M:%S")
+CAPTURED_AT_STR = now_jst.strftime("%Y-%m-%d %H:%M:%S")
 
-print(f"=== クラウド自動実行開始: 日付[{TARGET_DATE}], 取得時刻[{CAPTURED_AT}] ===")
+print(f"=== クラウド自動実行開始: 日付[{TARGET_DATE}], 取得時刻[{CAPTURED_AT_STR}] ===")
 
 # 1. 友人ツールデータ取得
 tool_url = f"https://keiba-simu-euphoria.ef4-db.workers.dev/days/{TARGET_DATE}.json"
@@ -65,18 +65,26 @@ for idx, r in enumerate(races, start=1):
     time.sleep(0.2)
 
     post_time_str = r.get("post_time", "")
-    odds_snapshot = r.get("odds_snapshot_at", "不明")
-    
-    # 発走前後の判定ロジック
-    is_pre_race = False
-    if post_time_str:
-        try:
+    odds_snapshot_str = r.get("odds_snapshot_at")
+
+    # 厳密な時刻検査
+    is_pre_race = 0
+    odds_elapsed_min = "不明"
+    try:
+        if post_time_str and odds_snapshot_str:
+            # ISOフォーマット等のパース
+            odds_clean = odds_snapshot_str.replace("Z", "+00:00")
+            odds_dt = datetime.fromisoformat(odds_clean).astimezone(JST)
             post_dt = datetime.strptime(f"{TARGET_DATE} {post_time_str}:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=JST)
-            # 取得時刻が発走前、かつオッズ取得が発走時刻以前なら事前予想として有効
-            if now_jst <= post_dt:
-                is_pre_race = True
-        except Exception:
-            pass
+
+            if odds_dt <= now_jst and now_jst < post_dt:
+                is_pre_race = 1
+
+            # オッズ基準時刻からの経過時間（分）
+            elapsed = (now_jst - odds_dt).total_seconds() / 60.0
+            odds_elapsed_min = round(elapsed, 1)
+    except Exception:
+        pass
 
     dist = r.get("distance_m", "")
     surface = r.get("surface", "不明")
@@ -106,16 +114,24 @@ for idx, r in enumerate(races, start=1):
         ev = round(m_share * odds, 2) if odds else 0
         bw_score = lh.get("bw_response_score", h.get("bw_response_score", 0))
 
+        # モデル更新時刻
+        model_updated_at = lh.get("_captured_at") or h.get("mark_late", {}).get("_captured_at") or "不明"
+
+        # 損益分岐勝率 (1 / 単勝オッズ)
+        be_win_rate = round((1.0 / odds) * 100, 2) if odds and odds > 0 else 0
+
         csv_rows.append({
-            "取得日時": CAPTURED_AT,
-            "事前予想フラグ": 1 if is_pre_race else 0,
-            "オッズ基準日時": odds_snapshot,
+            "取得日時": CAPTURED_AT_STR,
+            "事前予想有効": is_pre_race,
+            "発走予定時刻": post_time_str,
+            "オッズ基準日時": odds_snapshot_str or "不明",
+            "オッズ経過分": odds_elapsed_min,
+            "モデル更新日時": model_updated_at,
             "日付": TARGET_DATE,
             "場名": r.get("venue"),
             "R": race_num,
             "レース名": r_name or r.get("race_name") or f"第{race_num}競走",
             "元レースID": raw_race_id,
-            "発走": post_time_str,
             "距離": dist,
             "芝ダ": surface,
             "馬場状態": going_info,
@@ -132,6 +148,7 @@ for idx, r in enumerate(races, start=1):
             "人気": lh.get("popularity", h.get("popularity")),
             "単勝オッズ": odds,
             "複勝オッズ帯": place_odds,
+            "損益分岐勝率(%)": be_win_rate,
             "AI能力順位": h.get("strength_rank"),
             "AI勝率(%)": round(m_share * 100, 2),
             "市場勝率(%)": round(mk_share * 100, 2),
@@ -149,8 +166,7 @@ for idx, r in enumerate(races, start=1):
             lap_prof = past.get("lap_profile") or {}
             laps_list = lap_prof.get("laps", []) if isinstance(lap_prof, dict) else []
             late_3f = past.get("late_3f_sec")
-            # 20秒未満は異常値（障害ラストや不整合データ）フラグ
-            late_3f_valid = 1 if (late_3f and late_3f >= 25.0) else 0
+            late_3f_usable = 1 if (late_3f and late_3f >= 25.0) else 0
 
             history_rows.append({
                 "元レースID": raw_race_id,
@@ -163,7 +179,7 @@ for idx, r in enumerate(races, start=1):
                 "着順": past.get("finish_order"),
                 "頭数": past.get("field_size"),
                 "上がり3F": late_3f,
-                "上がり3F有効": late_3f_valid,
+                "上がり3F暫定使用可": late_3f_usable,
                 "上がり優位度": past.get("late_3f_advantage"),
                 "通過順比率": past.get("corner_ratio"),
                 "実測ラップ配列": json.dumps(laps_list) if laps_list else "[]"
