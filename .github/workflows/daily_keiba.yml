@@ -5,7 +5,7 @@ on:
     # JST 09:30（UTC 00:30）と JST 11:45（UTC 02:45）に自動実行
     - cron: '30 0 * * *'
     - cron: '45 2 * * *'
-  workflow_dispatch: # ブラウザやスマホから手動実行可能にするボタン
+  workflow_dispatch:
 
 jobs:
   run-pipeline:
@@ -19,13 +19,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 必要なライブラリのインストール
-        run: |
-          pip install google-api-python-client google-auth
-
       - name: スクレイピング＆Googleドライブ保存
         env:
-          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GAS_WEBHOOK_URL: ${{ secrets.GAS_WEBHOOK_URL }}
         run: |
           python keiba_scraper.py
