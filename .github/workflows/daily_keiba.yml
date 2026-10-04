@@ -2,14 +2,27 @@ name: Keiba CSV Auto Pipeline
 
 on:
   schedule:
-    # JST 09:30（UTC 00:30）と JST 11:45（UTC 02:45）に自動実行
+    # JST 09:30 / 11:45
     - cron: '30 0 * * *'
     - cron: '45 2 * * *'
   workflow_dispatch:
+    inputs:
+      target_date:
+        description: '対象日 YYYY-MM-DD（空欄なら日本時間の今日）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keiba-csv-pipeline
+  cancel-in-progress: false
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: リポジトリのチェックアウト
         uses: actions/checkout@v4
@@ -23,5 +36,5 @@ jobs:
         env:
           GAS_WEBHOOK_URL: ${{ secrets.GAS_WEBHOOK_URL }}
           NETKEIBA_COOKIE: ${{ secrets.NETKEIBA_COOKIE }}
-        run: |
-          python keiba_scraper.py
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: python keiba_scraper.py
