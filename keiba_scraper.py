@@ -1,4 +1,4 @@
-"""Existing two CSVs + Euphoria PL ticket probabilities; stdlib only."""
+"""Horse, history, ticket probabilities and price-aware shortlist; stdlib only."""
 import argparse
 import csv
 import html as html_lib
@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from euphoria_combinations import ticket_probabilities
+from ticket_candidates import build_candidate_rows, candidate_csv
 
 JST = timezone(timedelta(hours=9))
 SOURCE_ROOT = 'https://keiba-simu-euphoria.ef4-db.workers.dev'
@@ -307,13 +308,15 @@ def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_det
                 'API生成日時': raw_data.get('generated_at', ''),
                 '確率検証': '未検証', '市場入力の有無': '未確認',
             })
+    candidate_rows = build_candidate_rows(combo_rows, main_rows, captured)
     files = [
         {'filename': f'keiba_integrated_{target_date}.csv', 'content': csv_string(main_rows)},
         {'filename': f'horse_history_{target_date}.csv', 'content': csv_string(history_rows)},
         {'filename': f'keiba_combinations_{target_date}.csv', 'content': csv_string(combo_rows)},
+        {'filename': f'keiba_ticket_candidates_{target_date}.csv', 'content': candidate_csv(candidate_rows)},
     ]
     return files, {'races': len(seen_races), 'horses': len(main_rows),
-                   'history_rows': len(history_rows), 'combination_rows': len(combo_rows),
+                   'history_rows': len(history_rows), 'combination_rows': len(combo_rows), 'candidate_rows': len(candidate_rows),
                    'warnings': warnings}
 
 
@@ -373,3 +376,4 @@ if __name__ == '__main__':
     except Exception as exc:
         print(f'処理失敗: {type(exc).__name__}', file=sys.stderr)
         raise SystemExit(1)
+
