@@ -44,15 +44,19 @@ def _age_minutes(value, captured):
         return None
 
 
-def _market_probabilities_by_race(horses):
-    """PL market shape from normalized inverse win prices; no result is a quote."""
+def _market_probabilities_by_race(horses, captured, max_age):
+    """PL market shape and whether every input win-price clock is explicit."""
     grouped = defaultdict(list)
     for horse in horses:
         if str(horse.get('取消・除外', '0')) not in ('0', '', 'False'):
             continue
         grouped[horse['元レースID']].append(horse)
-    result = {}
+    result, clocks_confirmed = {}, {}
     for race_id, active in grouped.items():
+        clocks_confirmed[race_id] = all(
+            h.get('オッズ時刻採用方法') == 'API明示時刻' and
+            (age := _age_minutes(h.get('オッズ基準日時'), captured)) is not None and
+            age <= max_age for h in active)
         weights = []
         for horse in active:
             odds = _positive_number(horse.get('単勝オッズ'))
@@ -69,7 +73,7 @@ def _market_probabilities_by_race(horses):
                     result[race_id] = ticket_probabilities({'horses': weights})
                 except ValueError:
                     pass
-    return result
+    return result, clocks_confirmed
 
 
 def build_candidate_rows(combinations, horses, captured, *, min_ev=1.20,
@@ -87,14 +91,16 @@ def build_candidate_rows(combinations, horses, captured, *, min_ev=1.20,
     metadata = {}
     for horse in horses:
         metadata.setdefault(horse['元レースID'], horse)
-    market_probabilities = _market_probabilities_by_race(horses)
+    market_probabilities, market_clocks_confirmed = _market_probabilities_by_race(
+        horses, captured, max_price_age_minutes)
     quinella_quotes = {}
     for item in combinations:
         if item['券種'] == '馬連':
             odds = _positive_number(item.get('提示オッズ'))
             if odds is not None:
                 quinella_quotes[item['元レースID'], item['組み合わせ']] = (
-                    odds, item.get('オッズ基準日時', ''))
+                    odds, item.get('オッズ基準日時', ''),
+                    item.get('オッズ時刻採用方法', ''))
     grouped = defaultdict(list)
     for item in combinations:
         kind = item['券種']
@@ -107,11 +113,12 @@ def build_candidate_rows(combinations, horses, captured, *, min_ev=1.20,
         meta = metadata.get(race_id, {})
         quoted = _positive_number(item.get('提示オッズ'))
         age = _age_minutes(item.get('オッズ基準日時'), captured) if quoted else None
+        quote_clock_confirmed = item.get('オッズ時刻採用方法') == 'API明示時刻'
         threshold = math.ceil(min_ev / probability * 10 - 1e-10) / 10
         eligible = str(item.get('事前予想有効')) == '1'
         p_ok = probability >= MIN_PROBABILITY[kind]
         ev = probability * quoted if quoted is not None and age is not None else None
-        reference, anchor_odds, anchor_clock = '', '', ''
+        reference, anchor_odds, anchor_clock, anchor_source = '', '', '', ''
         if quoted is None and kind in ('馬単', 'ワイド'):
             try:
                 a, b = map(int, item['組み合わせ'].split('-'))
@@ -124,7 +131,7 @@ def build_candidate_rows(combinations, horses, captured, *, min_ev=1.20,
                 if anchor and q_pair and q_ticket:
                     payout_ratio = .75 / .775 if kind == '馬単' else 1.0
                     reference = round(anchor[0] * payout_ratio * q_pair / q_ticket, 2)
-                    anchor_odds, anchor_clock = anchor
+                    anchor_odds, anchor_clock, anchor_source = anchor
             except ValueError:
                 pass
         estimated_ev = probability * reference if reference else None
@@ -135,12 +142,15 @@ def build_candidate_rows(combinations, horses, captured, *, min_ev=1.20,
         elif not p_ok:
             status, reason = '参考', '的中確率が券種別の候補基準未満'
         elif quoted is None and stressed_ev is not None and stressed_ev >= min_ev:
-            status = '推定EV候補' if anchor_age is not None and anchor_age <= max_price_age_minutes else '推定EV候補・価格再確認'
-            reason = '馬連起点の推定オッズが半値でもEV基準を満たす（実価格未取得）'
+            confirmed = (anchor_age is not None and anchor_age <= max_price_age_minutes
+                         and market_clocks_confirmed.get(race_id, False)
+                         and anchor_source == 'API明示時刻')
+            status = '推定EV候補' if confirmed else '推定EV候補・価格再確認'
+            reason = '馬連起点の推定オッズが半値でもEV基準を満たす（実価格未取得。元価格の時刻を確認）'
         elif quoted is None:
             status, reason = '価格待ち', '最低購入オッズに達する実価格を確認する'
-        elif age is None:
-            status, reason = '価格再確認', 'オッズ基準日時が不明・不正・未来'
+        elif age is None or not quote_clock_confirmed:
+            status, reason = '価格再確認', 'オッズ原時刻が不明・不正・未来、または保存時刻で代用'
         elif age > max_price_age_minutes:
             status, reason = '価格再確認', 'オッズが古いため購入判断を保留'
         elif ev >= min_ev:
