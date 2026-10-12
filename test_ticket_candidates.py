@@ -7,10 +7,12 @@ JST = timezone(timedelta(hours=9))
 NOW = datetime(2026, 10, 12, 10, 0, tzinfo=JST)
 
 
-def ticket(kind, selection, probability, price='', snapshot='', valid=1):
+def ticket(kind, selection, probability, price='', snapshot='', valid=1,
+           clock_source='API明示時刻'):
     return {'券種': kind, '組み合わせ': selection,
             '推定的中確率': probability, '提示オッズ': price,
-            'オッズ基準日時': snapshot, '事前予想有効': valid,
+            'オッズ基準日時': snapshot, 'オッズ時刻採用方法': clock_source,
+            '事前予想有効': valid,
             '元レースID': 'race-1', '日付': '2026-10-12', 'R': 1,
             '確率検証': '未検証'}
 
@@ -56,7 +58,9 @@ class TicketCandidatesTest(unittest.TestCase):
 
     def test_quinella_proxy_is_separate_from_actual_ev(self):
         horses = [{'元レースID': 'race-1', '馬番': n,
-                   '単勝オッズ': odds, '取消・除外': 0}
+                   '単勝オッズ': odds, '取消・除外': 0,
+                   'オッズ時刻採用方法': 'API明示時刻',
+                   'オッズ基準日時': NOW.isoformat()}
                   for n, odds in [(1, 2.5), (2, 4.0), (3, 8.0), (4, 12.0)]]
         rows = build_candidate_rows([
             ticket('馬連', '1-2', .2, 10, NOW.isoformat()),
@@ -75,7 +79,9 @@ class TicketCandidatesTest(unittest.TestCase):
 
     def test_proxy_ev_promotes_only_under_stress_and_marks_stale_anchor(self):
         horses = [{'元レースID': 'race-1', '馬番': n,
-                   '単勝オッズ': odds, '取消・除外': 0}
+                   '単勝オッズ': odds, '取消・除外': 0,
+                   'オッズ時刻採用方法': 'API明示時刻',
+                   'オッズ基準日時': NOW.isoformat()}
                   for n, odds in [(1, 2.5), (2, 4), (3, 8), (4, 12)]]
         for anchor_clock, expected in [
             (NOW.isoformat(), '推定EV候補'),
@@ -89,6 +95,23 @@ class TicketCandidatesTest(unittest.TestCase):
             self.assertEqual(exacta['判定'], expected)
             self.assertGreaterEqual(exacta['半値想定EV倍率'], 1.2)
             self.assertEqual(exacta['EV倍率'], '')
+
+    def test_save_time_substitution_never_becomes_fresh_buy_signal(self):
+        row = build_candidate_rows([
+            ticket('単勝', '1', .2, 10, NOW.isoformat(),
+                   clock_source='保存時刻で代用')], HORSES, NOW)[0]
+        self.assertEqual(row['判定'], '価格再確認')
+        horses = [{'元レースID': 'race-1', '馬番': n,
+                   '単勝オッズ': odds, '取消・除外': 0,
+                   'オッズ時刻採用方法': '保存時刻で代用',
+                   'オッズ基準日時': NOW.isoformat()}
+                  for n, odds in [(1, 2.5), (2, 4), (3, 8), (4, 12)]]
+        rows = build_candidate_rows([
+            ticket('馬連', '1-2', .5, 30, NOW.isoformat()),
+            ticket('馬単', '1-2', .3),
+        ], horses, NOW)
+        exacta = next(r for r in rows if r['券種'] == '馬単')
+        self.assertEqual(exacta['判定'], '推定EV候補・価格再確認')
 
 
 if __name__ == '__main__':
