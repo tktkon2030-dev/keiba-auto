@@ -2,9 +2,10 @@ name: Keiba CSV Auto Pipeline
 
 on:
   schedule:
-    # JST 09:30 / 11:45
-    - cron: '30 0 * * *'
-    - cron: '45 2 * * *'
+    # 土日の JST 09:30 / 11:45（UTC 00:30 / 02:45）
+    # 祝日・代替開催は workflow_dispatch で対象日を指定して実行する。
+    - cron: '30 0 * * 0,6'
+    - cron: '45 2 * * 0,6'
   workflow_dispatch:
     inputs:
       target_date:
