@@ -329,6 +329,8 @@ def main():
     parser.add_argument('--output-dir', default='output')
     args = parser.parse_args()
     date = args.date or os.environ.get('TARGET_DATE') or datetime.now(JST).date().isoformat()
+    # Accept dates copied from Japanese UIs as well as the canonical ISO format.
+    date = date.strip().replace('/', '-')
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', date):
         raise ValueError('対象日は YYYY-MM-DD')
     datetime.strptime(date, '%Y-%m-%d')
