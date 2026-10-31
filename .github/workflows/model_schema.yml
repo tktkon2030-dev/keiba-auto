@@ -28,17 +28,6 @@ jobs:
         run: |
           python keiba_scraper.py --inspect-models
           python -c 'import json; d=json.load(open("output/model_schema.json")); print(json.dumps(d, ensure_ascii=False))'
-      - name: Inspect observed public model scripts
-        run: |
-          python - <<'PY'
-          import urllib.request,re
-          for url in ['https://euphoriaxx.ef4-db.workers.dev/js/nw1.js?v=nw13-20261024-excl1','https://euphoriaxx.ef4-db.workers.dev/js/app.js?v=sw6-nw13-rv3-final1-scroll1']:
-              print('PUBLIC_SCRIPT',url)
-              with urllib.request.urlopen(url,timeout=20) as response:
-                  source=response.read(2000000).decode('utf-8')
-              for match in list(re.finditer(r'fetch\(|IM1|NW1|nw1|model_share|predictRace',source))[:70]:
-                  print(source[max(0,match.start()-180):match.end()+400].replace('\n',' '))
-          PY
       - uses: actions/upload-artifact@v4
         with:
           name: euphoria-model-schema
