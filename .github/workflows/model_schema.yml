@@ -16,7 +16,6 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,13 +23,11 @@ jobs:
           python-version: '3.11'
       - name: Inspect API structure (no GAS or netkeiba)
         env:
-          TARGET_DATE: ${{ inputs.target_date || '2026-11-01' }}
+          TARGET_DATE: ${{ inputs.target_date }}
           EUPHORIA_SOURCE_ROOT: https://euphoriaxx.ef4-db.workers.dev
         run: |
           python keiba_scraper.py --inspect-models
           python -c 'import json; d=json.load(open("output/model_schema.json")); print(json.dumps(d, ensure_ascii=False))'
-      - name: Inspect public UI contract
-        run: python inspect_ui_contract.py
       - uses: actions/upload-artifact@v4
         with:
           name: euphoria-model-schema
