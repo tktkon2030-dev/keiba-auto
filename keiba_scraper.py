@@ -10,6 +10,7 @@ import re
 import sys
 import time
 import urllib.request
+from urllib.parse import urlsplit
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -77,7 +78,11 @@ def ids(raw_id):
 
 
 def fetch_json(date):
-    url = f'{SOURCE_ROOT}/days/{date}.json'
+    root = os.environ.get('EUPHORIA_SOURCE_ROOT') or SOURCE_ROOT
+    parts = urlsplit(root)
+    if parts.scheme != 'https' or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError('source root requires a public HTTPS origin without credentials or query')
+    url = f'{root.rstrip(chr(47))}/days/{date}.json'
     req = urllib.request.Request(url, headers={'User-Agent': 'KeibaCSV/3.0'})
     with urllib.request.urlopen(req, timeout=40) as res:
         return json.loads(res.read().decode('utf-8'))
