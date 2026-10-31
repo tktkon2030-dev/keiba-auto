@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from euphoria_combinations import ticket_probabilities
+from model_snapshot import select_day, schema_report
 from ticket_candidates import build_candidate_rows, candidate_csv
 
 JST = timezone(timedelta(hours=9))
@@ -127,7 +128,8 @@ def csv_string(rows):
     return out.getvalue()
 
 
-def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_details):
+def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_details, model_profile=None):
+    raw_data = select_day(raw_data, model_profile)
     main_rows, history_rows, combo_rows, warnings = [], [], [], []
     races = raw_data.get('races')
     if not isinstance(races, list) or not races:
@@ -145,7 +147,10 @@ def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_det
             raise ValueError(f'対象日不一致: {raw_id}')
         post = timestamp(r.get('post_time'), target_date)
         clock, clock_source, clock_ok = odds_clock(r.get('odds_snapshot_at'), captured)
-        source_ok = generated is not None and generated <= captured
+        model_clock_raw = r.get('selected_model_updated_at')
+        model_clock = timestamp(model_clock_raw)
+        model_clock_ok = not model_clock_raw or (model_clock is not None and model_clock <= captured)
+        source_ok = generated is not None and generated <= captured and model_clock_ok
         valid = bool(post and captured < post and clock_ok and clock and source_ok)
         state = '未発走' if post and captured < post else '発走済み' if post else '発走時刻不明'
         if not source_ok:
@@ -165,6 +170,9 @@ def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_det
         ld = {int(h['horse_no']): h for h in late_items if h.get('horse_no') is not None}
         # Top-level races is the canonical currently delivered snapshot. Late is
         # only a missing-field fallback; do not overwrite current values with locked data.
+        probabilities = ticket_probabilities(r, tau=1.0)
+        active_count = sum(h.get('scratched') is not True for h in h_list)
+        place_kind = '3着内' if active_count >= 8 else '2着内'
         merged = []
         for h in h_list:
             no = int(h['horse_no'])
@@ -172,7 +180,7 @@ def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_det
             mh = dict(h)
             fallback_fields = []
             for key, value in old.items():
-                if mh.get(key) is None and value is not None:
+                if key not in ('model_share', 'pl_place_prob', 'strength_rank', 'divergence', 'legacy_model_share') and mh.get(key) is None and value is not None:
                     mh[key] = value
                     fallback_fields.append(key)
             merged.append(mh)
@@ -189,7 +197,8 @@ def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_det
             main_rows.append({
                 '取得日時': captured.isoformat(), '事前予想有効': int(price_valid),
                 '発走予定時刻': r.get('post_time', ''), 'オッズ基準日時': clock.isoformat() if clock else '不明',
-                'オッズ経過分': elapsed, 'モデル更新日時': raw_data.get('generated_at', '不明'),
+                'オッズ経過分': elapsed, 'モデル更新日時': r.get('selected_model_updated_at') or '',
+                'モデル更新時刻の根拠': '選択モデルの明示時刻' if r.get('selected_model_updated_at') else 'モデル固有時刻未取得（API生成日時と区別）',
                 '日付': target_date, '場名': r.get('venue'), 'R': race_no,
                 'レース名': r_name or r.get('race_name') or f'第{race_no}競走', '元レースID': raw_id,
                 '距離': r.get('distance_m', ''), '芝ダ': r.get('surface', ''), '馬場状態': going or '不明',
@@ -206,7 +215,7 @@ def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_det
                 '市場勝率(%)': rounded(market, 2, 100),
                 '妙味度(歪み)': rounded(mh.get('divergence'), 3, 100),
                 '期待値(EV)': round(share * odds, 4) if price_valid and share is not None else '',
-                '複勝率(%)': rounded(mh.get('pl_place_prob'), 2, 100),
+                '複勝率(%)': rounded(probabilities.get((place_kind, (no,))), 2, 100) if not cancelled and active_count >= 5 and not any(h.get('scratched') is True for h in h_list) else '',
                 '脚質': mh.get('style_label', ''), '位置取り指数': mh.get('style_early_position', ''),
                 '馬体重': mh.get('bodyweight_kg', ''), '増減': mh.get('bodyweight_delta_kg', ''),
                 '体重評価スコア': rounded(mh.get('bw_response_score'), 4),
@@ -217,6 +226,12 @@ def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_det
                 'モデルID': provenance.get('model_id') or raw_data.get('model_id', ''),
                 'モデル情報': json.dumps(provenance, ensure_ascii=False, sort_keys=True),
                 '市場入力の有無': '未確認', 'モデル確率検証': '未検証',
+                '旧モデル勝率(%)': rounded(mh.get('legacy_model_share'), 2, 100),
+                '勝率取得項目': r['selected_model_path'],
+                'モデル選択方式': r['selected_model_policy'],
+                '正規化前確率合計': r['selected_probability_mass'],
+                '連対率(%)': rounded(probabilities.get(('2着内', (no,))), 2, 100) if not cancelled else '',
+                '想定ラップ情報': json.dumps(pace, ensure_ascii=False, sort_keys=True),
                 'late補完項目': ','.join(fallback_fields),
             })
             for past in h.get('past_runs') or []:
@@ -307,6 +322,8 @@ def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_det
                 'モデルID': (r.get('model_provenance') or {}).get('model_id') or raw_data.get('model_id', ''),
                 'API生成日時': raw_data.get('generated_at', ''),
                 '確率検証': '未検証', '市場入力の有無': '未確認',
+                '勝率取得項目': r['selected_model_path'],
+                'モデル選択方式': r['selected_model_policy'],
             })
     candidate_rows = build_candidate_rows(combo_rows, main_rows, captured)
     files = [
@@ -324,6 +341,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('date', nargs='?')
     parser.add_argument('--input-json', help='ローカル検証用。指定時は送信禁止')
+    parser.add_argument('--model-profile', default=os.environ.get('EUPHORIA_MODEL_PROFILE'), help='実APIに照合したモデル項目マップJSON')
+    parser.add_argument('--inspect-models', action='store_true', help='API項目構造だけ保存。CSV生成・GAS送信なし')
     parser.add_argument('--skip-netkeiba', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--output-dir', default='output')
@@ -339,6 +358,16 @@ def main():
             raw = json.load(f)
     else:
         raw = fetch_json(date)
+    if args.inspect_models:
+        output = Path(args.output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / 'model_schema.json').write_text(json.dumps(schema_report(raw), ensure_ascii=False, indent=2), encoding='utf-8')
+        print('モデル項目診断完了。CSV生成・GAS送信なし。')
+        return
+    profile = None
+    if args.model_profile:
+        with open(args.model_profile, encoding='utf-8-sig') as f:
+            profile = json.load(f)
     captured = datetime.now(JST)
     def card_fetcher(race_id):
         if args.skip_netkeiba:
@@ -346,7 +375,7 @@ def main():
         result = fetch_netkeiba_details(race_id)
         time.sleep(0.2)
         return result
-    files, summary = build_files(raw, date, captured, card_fetcher)
+    files, summary = build_files(raw, date, captured, card_fetcher, model_profile=profile)
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     for file in files:
@@ -378,4 +407,5 @@ if __name__ == '__main__':
     except Exception as exc:
         print(f'処理失敗: {type(exc).__name__}', file=sys.stderr)
         raise SystemExit(1)
+
 
