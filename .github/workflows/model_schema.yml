@@ -1,0 +1,36 @@
+name: Inspect Euphoria model schema
+on:
+  pull_request:
+    paths:
+      - model_snapshot.py
+      - keiba_scraper.py
+      - .github/workflows/model_schema.yml
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: '対象日 YYYY-MM-DD'
+        required: true
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Inspect API structure (no GAS or netkeiba)
+        env:
+          TARGET_DATE: ${{ inputs.target_date }}
+          EUPHORIA_SOURCE_ROOT: https://euphoriaxx.ef4-db.workers.dev
+        run: |
+          python keiba_scraper.py --inspect-models
+          python -c 'import json; d=json.load(open("output/model_schema.json")); print(json.dumps(d, ensure_ascii=False))'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: euphoria-model-schema
+          path: output/model_schema.json
+          retention-days: 7
+          if-no-files-found: error
