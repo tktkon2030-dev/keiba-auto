@@ -237,6 +237,13 @@ def build_files(raw_data, target_date, captured, card_fetcher=fetch_netkeiba_det
                 '正規化前確率合計': r['selected_probability_mass'],
                 '連対率(%)': rounded(probabilities.get(('2着内', (no,))), 2, 100) if not cancelled else '',
                 '想定ラップ情報': json.dumps(pace, ensure_ascii=False, sort_keys=True),
+                '想定ラップ配列': json.dumps(pace.get('laps'), ensure_ascii=False),
+                '基準ラップ配列': json.dumps(pace.get('reference_laps'), ensure_ascii=False),
+                '基準ラップ母数': pace.get('reference_n_races', ''),
+                '予測前半秒': pace.get('front_half_sec', ''),
+                '予測上がり3F秒': pace.get('up3f_sec', ''),
+                '脚質構成': json.dumps(pace.get('style_counts'), ensure_ascii=False),
+                '好走凡走時の位置情報': json.dumps(mh.get('pace_shape_morning'), ensure_ascii=False),
                 'late補完項目': ','.join(fallback_fields),
             })
             for past in h.get('past_runs') or []:
