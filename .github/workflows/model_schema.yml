@@ -29,6 +29,8 @@ jobs:
         run: |
           python keiba_scraper.py --inspect-models
           python -c 'import json; d=json.load(open("output/model_schema.json")); print(json.dumps(d, ensure_ascii=False))'
+      - name: Inspect public UI contract
+        run: python inspect_ui_contract.py
       - uses: actions/upload-artifact@v4
         with:
           name: euphoria-model-schema
