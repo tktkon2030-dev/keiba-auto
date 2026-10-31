@@ -19,7 +19,7 @@ FIELDS = (
     '最低購入オッズ', '提示オッズ', 'オッズ基準日時', '価格経過分', 'EV倍率',
     '参考推定オッズ', '推定EV倍率', '半値想定EV倍率',
     '推定元馬連オッズ', '推定元オッズ基準日時',
-    '判定', '判定理由', 'モデル確率検証',
+    '判定', '判定理由', 'モデル確率検証', 'モデルID', '勝率取得項目', 'モデル選択方式',
 )
 
 
@@ -167,6 +167,9 @@ def build_candidate_rows(combinations, horses, captured, *, min_ev=1.20,
             '推定元オッズ基準日時': anchor_clock,
             '判定': status, '判定理由': reason,
             'モデル確率検証': item.get('確率検証', '未検証'),
+            'モデルID': item.get('モデルID', ''),
+            '勝率取得項目': item.get('勝率取得項目', ''),
+            'モデル選択方式': item.get('モデル選択方式', ''),
         }
         # Rank actual-price candidates first, then proxy-price candidates.
         if p_ok:
@@ -198,3 +201,4 @@ def candidate_csv(rows):
     writer.writeheader()
     writer.writerows(rows)
     return output.getvalue()
+
