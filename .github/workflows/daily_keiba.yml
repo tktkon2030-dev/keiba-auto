@@ -39,3 +39,21 @@ jobs:
           NETKEIBA_COOKIE: ${{ secrets.NETKEIBA_COOKIE }}
           TARGET_DATE: ${{ inputs.target_date }}
         run: python keiba_scraper.py
+
+      - name: 発走前予測を検証用に固定
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if compgen -G 'output/keiba_integrated_*.csv' > /dev/null; then
+            python postrace_review.py capture --input-dir output --output-dir archive
+          else
+            echo 'CSV未生成のため予測記録なし'
+          fi
+
+      - name: 予測履歴を保存（Driveのファイルは増やさない）
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: keiba-predictions-${{ github.run_id }}-${{ github.run_attempt }}
+          path: archive/snapshot-*.json
+          if-no-files-found: warn
+          retention-days: 90
