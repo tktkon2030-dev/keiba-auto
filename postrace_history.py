@@ -1,7 +1,7 @@
 """Download retained prediction/result artifacts via the runner's gh CLI.
 
-No credentials in URLs/logs. Results and predictions never enter the Drive
-folder. Limits bound downloads; expired artifacts are explicitly counted.
+No credentials in URLs/logs. This is a bounded GitHub backup; the separate
+postrace_drive module restores the long-term archive.
 """
 import argparse
 import io

@@ -23,12 +23,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Drive履歴の読込キャッシュ
+        uses: actions/cache@v4
+        with:
+          path: history/drive
+          key: keiba-drive-history-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: keiba-drive-history-
       - name: 保持期間内の予測・結果履歴を取得
         env:
           GH_TOKEN: ${{ github.token }}
         run: python postrace_history.py --output-dir history
+      - name: Driveから長期履歴を読み戻す
+        env:
+          GAS_WEBHOOK_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+          GAS_ARCHIVE_TOKEN: ${{ secrets.GAS_ARCHIVE_TOKEN }}
+        run: python postrace_drive.py download --directory history/drive
       - name: 結果取得と検証（元の勝率は変更しない）
         run: python postrace_review.py review --history history --fetch-results --output-dir review
+      - name: 新しく取得した結果をDriveへ保存
+        env:
+          GAS_WEBHOOK_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+          GAS_ARCHIVE_TOKEN: ${{ secrets.GAS_ARCHIVE_TOKEN }}
+        run: python postrace_drive.py upload --directory review
       - name: 検証レポートを表示
         run: cat review/review.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

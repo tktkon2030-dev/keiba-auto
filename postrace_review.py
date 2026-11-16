@@ -367,6 +367,7 @@ def main():
     snapshots, results = load_history(args.history)
     results = {rid: result for rid, result in results.items() if rid in snapshots}
     errors = []
+    refreshed = []
     if args.fetch_results:
         now = datetime.now(JST)
         for rid, race in sorted(snapshots.items()):
@@ -378,9 +379,11 @@ def main():
                 continue
             try:
                 results[rid] = fetch_result(rid)
+                refreshed.append(rid)
             except Exception as exc:
                 errors.append({'race_id': rid, 'error_type': type(exc).__name__})
-    result_bundle = {'kind': 'keiba_results_v1', 'results': results, 'fetch_errors': errors}
+    result_bundle = {'kind': 'keiba_results_v1', 'results': results, 'fetch_errors': errors,
+                     'refreshed_race_ids': refreshed}
     (output / 'results.json').write_text(canonical(result_bundle) + '\n', encoding='utf-8')
     review = evaluate(snapshots, results, read_csv(args.ledger) if args.ledger else None)
     review['fetch_errors'] = errors

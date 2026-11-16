@@ -49,7 +49,14 @@ jobs:
             echo 'CSV未生成のため予測記録なし'
           fi
 
-      - name: 予測履歴を保存（Driveのファイルは増やさない）
+      - name: 発走前予測をDriveへ長期保存
+        if: ${{ always() && !cancelled() }}
+        env:
+          GAS_WEBHOOK_URL: ${{ secrets.GAS_WEBHOOK_URL }}
+          GAS_ARCHIVE_TOKEN: ${{ secrets.GAS_ARCHIVE_TOKEN }}
+        run: python postrace_drive.py upload --directory archive
+
+      - name: 予測履歴の予備をGitHubにも保存
         if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:

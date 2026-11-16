@@ -3,14 +3,16 @@
 ## 何が増えるか
 
 - 既存CSVは従来どおりGASへ送信。同日上書きの運用を変更しない。
+  学習用履歴は別途、Driveの `学習履歴/YYYY-MM/` へ長期保存する。
 - 朝・昼のCSV生成後、**発走前だったレースだけ**を別のJSONに固定。
   全頭勝率、モデルID/情報、馬場、時刻、券種候補を保存する。
-- GitHub Actionsのartifactへ実行IDごとに保存する。Driveに履歴ファイルを
-  増やさない。同一予測の再実行は同じ内容ハッシュで識別できる。
+- Driveへ内容ハッシュ付きで保存し、GitHub Actionsのartifactも予備として
+  保存する。同一予測の再送は同じDriveファイルを再利用する。
 - 土日18:30 JSTに結果・払戻を取得し、ActionsのSummaryとartifactに
   `review.md` / `review.json` / `results.json` を出力する。
   祝日・代替開催は `Keiba Post-race Review` を手動実行する。
-- 予測の変更や自動購入は行わない。GASの変更も不要。
+- 予測の変更や自動購入は行わない。Drive長期保存にはGASの追加設定が必要。
+  手順は [gas/HISTORY_SETUP.md](gas/HISTORY_SETUP.md)。
 
 このPRを既定ブランチに反映した後に定期実行が有効になる。
 過去の予測履歴がない時点では「評価0レース」が正しい。
@@ -104,13 +106,14 @@ python postrace_review.py review --history history --ledger purchases.csv --outp
 
 ## 保持期間・未実装
 
-artifactは90日保持。取得上限は直近500 artifact。永久保存ではなく、
-現在の検証は保持期間内の予測が対象。長期保存したい場合は期限前に
-artifactを取得して保管するか、将来、別の永続アーカイブ先を接続する。
-結果キャッシュだけ残っても、失われた予測を復元して学習には使わない。
+Driveの履歴に自動削除期限はない。次回の検証時に、過去の月も含めて
+予測・結果を読み戻す。Actions cacheで再ダウンロードを減らすが、キャッシュは
+永続保存元ではない。Driveが保存元。GitHub artifactは90日保持・取得上限
+直近500件の予備。Drive設定・認証に失敗した場合は明示的に失敗表示する。
+結果だけ残っても、失われた予測を復元して学習には使わない。
 
 未実装：会話の最終買い目の自動保存、IPAT/UMACA購入履歴の自動連携、
 全組合せの検証、JRAとの全件照合、見送り判断の全ポリシー再現、
 外部モデル再学習、補正勝率の実運用CSVへの自動反映。
 
-検証：`python -m unittest -v test_ticket_candidates test_postrace_review`
+検証：`python -m unittest -v test_ticket_candidates test_postrace_review test_postrace_drive`。GASは `node gas/HistoryArchive.test.cjs`
