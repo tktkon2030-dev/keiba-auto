@@ -1,0 +1,22 @@
+name: Post-race Review Tests
+on:
+  pull_request:
+    paths:
+      - '*postrace*.py'
+      - 'ticket_candidates.py'
+      - 'keiba_scraper.py'
+      - '.github/workflows/postrace*.yml'
+      - 'gas/HistoryArchive*'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest -v test_ticket_candidates test_postrace_review test_postrace_drive
+      - run: node gas/HistoryArchive.test.cjs
